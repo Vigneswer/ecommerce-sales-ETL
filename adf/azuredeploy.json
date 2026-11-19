@@ -1,0 +1,701 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "factoryName": {
+      "type": "string",
+      "metadata": {
+        "description": "A globally unique name for this demo data factory."
+      }
+    },
+    "factoryLocation": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Azure region for the data factory."
+      }
+    },
+    "storageAccountName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the existing hierarchical namespace-enabled Azure storage account."
+      }
+    },
+    "fileSystem": {
+      "type": "string",
+      "defaultValue": "sales-demo",
+      "metadata": {
+        "description": "Name of the existing ADLS Gen2 container."
+      }
+    },
+    "databricksWorkspaceUrl": {
+      "type": "string",
+      "metadata": {
+        "description": "Per-workspace HTTPS URL, with no trailing slash."
+      }
+    },
+    "databricksClusterId": {
+      "type": "string",
+      "metadata": {
+        "description": "ID of existing Unity Catalog-capable Databricks compute."
+      }
+    },
+    "databricksToken": {
+      "type": "secureString",
+      "metadata": {
+        "description": "Databricks personal access token for the demo notebook and compute."
+      }
+    },
+    "notebookPath": {
+      "type": "string",
+      "metadata": {
+        "description": "Absolute workspace path to the imported notebook, without the .py extension."
+      }
+    },
+    "databricksVolumePath": {
+      "type": "string",
+      "metadata": {
+        "description": "External Unity Catalog volume at the ADLS pipeline folder, for example /Volumes/main/sales/pipeline."
+      }
+    },
+    "postgresServer": {
+      "type": "string",
+      "metadata": {
+        "description": "Server hostname, such as example.postgres.database.azure.com."
+      }
+    },
+    "postgresDatabase": {
+      "type": "string",
+      "defaultValue": "postgres",
+      "metadata": {
+        "description": "Database containing the sales schema."
+      }
+    },
+    "postgresUsername": {
+      "type": "string",
+      "metadata": {
+        "description": "PostgreSQL login with access to both sales reporting tables."
+      }
+    },
+    "postgresPassword": {
+      "type": "secureString",
+      "metadata": {
+        "description": "Password for the PostgreSQL login."
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.DataFactory/factories",
+      "apiVersion": "2018-06-01",
+      "name": "[parameters('factoryName')]",
+      "location": "[parameters('factoryLocation')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {}
+    },
+    {
+      "type": "Microsoft.DataFactory/factories/linkedservices",
+      "apiVersion": "2018-06-01",
+      "name": "[format('{0}/SalesLake', parameters('factoryName'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.DataFactory/factories', parameters('factoryName'))]"
+      ],
+      "properties": {
+        "type": "AzureBlobFS",
+        "typeProperties": {
+          "url": "[format('https://{0}.dfs.core.windows.net', parameters('storageAccountName'))]"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.DataFactory/factories/linkedservices",
+      "apiVersion": "2018-06-01",
+      "name": "[format('{0}/SalesDatabricks', parameters('factoryName'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.DataFactory/factories', parameters('factoryName'))]"
+      ],
+      "properties": {
+        "type": "AzureDatabricks",
+        "typeProperties": {
+          "domain": "[parameters('databricksWorkspaceUrl')]",
+          "existingClusterId": "[parameters('databricksClusterId')]",
+          "accessToken": {
+            "type": "SecureString",
+            "value": "[parameters('databricksToken')]"
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.DataFactory/factories/linkedservices",
+      "apiVersion": "2018-06-01",
+      "name": "[format('{0}/SalesPostgres', parameters('factoryName'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.DataFactory/factories', parameters('factoryName'))]"
+      ],
+      "properties": {
+        "type": "AzurePostgreSql",
+        "version": "2.0",
+        "typeProperties": {
+          "server": "[parameters('postgresServer')]",
+          "port": 5432,
+          "database": "[parameters('postgresDatabase')]",
+          "sslMode": 3,
+          "authenticationType": "BasicAuth",
+          "username": "[parameters('postgresUsername')]",
+          "password": {
+            "type": "SecureString",
+            "value": "[parameters('postgresPassword')]"
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.DataFactory/factories/datasets",
+      "apiVersion": "2018-06-01",
+      "name": "[format('{0}/SalesInputFile', parameters('factoryName'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.DataFactory/factories', parameters('factoryName'))]",
+        "[resourceId('Microsoft.DataFactory/factories/linkedservices', parameters('factoryName'), 'SalesLake')]"
+      ],
+      "properties": {
+        "linkedServiceName": {
+          "referenceName": "SalesLake",
+          "type": "LinkedServiceReference"
+        },
+        "type": "Binary",
+        "parameters": {
+          "folderPath": {
+            "type": "String"
+          },
+          "fileName": {
+            "type": "String"
+          }
+        },
+        "typeProperties": {
+          "location": {
+            "type": "AzureBlobFSLocation",
+            "fileSystem": "[parameters('fileSystem')]",
+            "folderPath": {
+              "value": "@dataset().folderPath",
+              "type": "Expression"
+            },
+            "fileName": {
+              "value": "@dataset().fileName",
+              "type": "Expression"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.DataFactory/factories/datasets",
+      "apiVersion": "2018-06-01",
+      "name": "[format('{0}/SalesParquetExport', parameters('factoryName'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.DataFactory/factories', parameters('factoryName'))]",
+        "[resourceId('Microsoft.DataFactory/factories/linkedservices', parameters('factoryName'), 'SalesLake')]"
+      ],
+      "properties": {
+        "linkedServiceName": {
+          "referenceName": "SalesLake",
+          "type": "LinkedServiceReference"
+        },
+        "type": "Parquet",
+        "parameters": {
+          "folderPath": {
+            "type": "String"
+          }
+        },
+        "typeProperties": {
+          "location": {
+            "type": "AzureBlobFSLocation",
+            "fileSystem": "[parameters('fileSystem')]",
+            "folderPath": {
+              "value": "@dataset().folderPath",
+              "type": "Expression"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.DataFactory/factories/datasets",
+      "apiVersion": "2018-06-01",
+      "name": "[format('{0}/SalesPostgresTable', parameters('factoryName'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.DataFactory/factories', parameters('factoryName'))]",
+        "[resourceId('Microsoft.DataFactory/factories/linkedservices', parameters('factoryName'), 'SalesPostgres')]"
+      ],
+      "properties": {
+        "linkedServiceName": {
+          "referenceName": "SalesPostgres",
+          "type": "LinkedServiceReference"
+        },
+        "type": "AzurePostgreSqlTable",
+        "parameters": {
+          "tableName": {
+            "type": "String"
+          }
+        },
+        "typeProperties": {
+          "schema": "sales",
+          "table": {
+            "value": "@dataset().tableName",
+            "type": "Expression"
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.DataFactory/factories/pipelines",
+      "apiVersion": "2018-06-01",
+      "name": "[format('{0}/EcommerceSalesDaily', parameters('factoryName'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.DataFactory/factories', parameters('factoryName'))]",
+        "[resourceId('Microsoft.DataFactory/factories/datasets', parameters('factoryName'), 'SalesInputFile')]",
+        "[resourceId('Microsoft.DataFactory/factories/datasets', parameters('factoryName'), 'SalesParquetExport')]",
+        "[resourceId('Microsoft.DataFactory/factories/datasets', parameters('factoryName'), 'SalesPostgresTable')]",
+        "[resourceId('Microsoft.DataFactory/factories/linkedservices', parameters('factoryName'), 'SalesDatabricks')]"
+      ],
+      "properties": {
+        "description": "Stage a synthetic order snapshot, validate and aggregate the requested order date in Databricks, and upsert both sales reports to PostgreSQL.",
+        "concurrency": 1,
+        "parameters": {
+          "salesDate": {
+            "type": "String",
+            "defaultValue": "2025-01-15"
+          }
+        },
+        "activities": [
+          {
+            "name": "StageOrders",
+            "type": "Copy",
+            "policy": {
+              "timeout": "0.00:30:00",
+              "retry": 1,
+              "retryIntervalInSeconds": 30
+            },
+            "inputs": [
+              {
+                "referenceName": "SalesInputFile",
+                "type": "DatasetReference",
+                "parameters": {
+                  "folderPath": "incoming",
+                  "fileName": "orders.csv"
+                }
+              }
+            ],
+            "outputs": [
+              {
+                "referenceName": "SalesInputFile",
+                "type": "DatasetReference",
+                "parameters": {
+                  "folderPath": {
+                    "value": "@concat('pipeline/raw/', pipeline().RunId)",
+                    "type": "Expression"
+                  },
+                  "fileName": "orders.csv"
+                }
+              }
+            ],
+            "typeProperties": {
+              "source": {
+                "type": "BinarySource",
+                "storeSettings": {
+                  "type": "AzureBlobFSReadSettings",
+                  "recursive": false
+                }
+              },
+              "sink": {
+                "type": "BinarySink",
+                "storeSettings": {
+                  "type": "AzureBlobFSWriteSettings"
+                }
+              },
+              "enableStaging": false
+            }
+          },
+          {
+            "name": "StageOrderItems",
+            "type": "Copy",
+            "policy": {
+              "timeout": "0.00:30:00",
+              "retry": 1,
+              "retryIntervalInSeconds": 30
+            },
+            "inputs": [
+              {
+                "referenceName": "SalesInputFile",
+                "type": "DatasetReference",
+                "parameters": {
+                  "folderPath": "incoming",
+                  "fileName": "order_items.csv"
+                }
+              }
+            ],
+            "outputs": [
+              {
+                "referenceName": "SalesInputFile",
+                "type": "DatasetReference",
+                "parameters": {
+                  "folderPath": {
+                    "value": "@concat('pipeline/raw/', pipeline().RunId)",
+                    "type": "Expression"
+                  },
+                  "fileName": "order_items.csv"
+                }
+              }
+            ],
+            "typeProperties": {
+              "source": {
+                "type": "BinarySource",
+                "storeSettings": {
+                  "type": "AzureBlobFSReadSettings",
+                  "recursive": false
+                }
+              },
+              "sink": {
+                "type": "BinarySink",
+                "storeSettings": {
+                  "type": "AzureBlobFSWriteSettings"
+                }
+              },
+              "enableStaging": false
+            }
+          },
+          {
+            "name": "StageRefunds",
+            "type": "Copy",
+            "policy": {
+              "timeout": "0.00:30:00",
+              "retry": 1,
+              "retryIntervalInSeconds": 30
+            },
+            "inputs": [
+              {
+                "referenceName": "SalesInputFile",
+                "type": "DatasetReference",
+                "parameters": {
+                  "folderPath": "incoming",
+                  "fileName": "refunds.csv"
+                }
+              }
+            ],
+            "outputs": [
+              {
+                "referenceName": "SalesInputFile",
+                "type": "DatasetReference",
+                "parameters": {
+                  "folderPath": {
+                    "value": "@concat('pipeline/raw/', pipeline().RunId)",
+                    "type": "Expression"
+                  },
+                  "fileName": "refunds.csv"
+                }
+              }
+            ],
+            "typeProperties": {
+              "source": {
+                "type": "BinarySource",
+                "storeSettings": {
+                  "type": "AzureBlobFSReadSettings",
+                  "recursive": false
+                }
+              },
+              "sink": {
+                "type": "BinarySink",
+                "storeSettings": {
+                  "type": "AzureBlobFSWriteSettings"
+                }
+              },
+              "enableStaging": false
+            }
+          },
+          {
+            "name": "ValidateAndAggregateSales",
+            "type": "DatabricksNotebook",
+            "policy": {
+              "timeout": "0.00:30:00",
+              "retry": 1,
+              "retryIntervalInSeconds": 30
+            },
+            "dependsOn": [
+              {
+                "activity": "StageOrders",
+                "dependencyConditions": [
+                  "Succeeded"
+                ]
+              },
+              {
+                "activity": "StageOrderItems",
+                "dependencyConditions": [
+                  "Succeeded"
+                ]
+              },
+              {
+                "activity": "StageRefunds",
+                "dependencyConditions": [
+                  "Succeeded"
+                ]
+              }
+            ],
+            "linkedServiceName": {
+              "referenceName": "SalesDatabricks",
+              "type": "LinkedServiceReference"
+            },
+            "typeProperties": {
+              "notebookPath": "[parameters('notebookPath')]",
+              "baseParameters": {
+                "volume_path": "[parameters('databricksVolumePath')]",
+                "run_id": {
+                  "value": "@pipeline().RunId",
+                  "type": "Expression"
+                },
+                "sales_date": {
+                  "value": "@pipeline().parameters.salesDate",
+                  "type": "Expression"
+                }
+              }
+            }
+          },
+          {
+            "name": "UpsertChannelSales",
+            "type": "Copy",
+            "policy": {
+              "timeout": "0.00:30:00",
+              "retry": 1,
+              "retryIntervalInSeconds": 30
+            },
+            "dependsOn": [
+              {
+                "activity": "ValidateAndAggregateSales",
+                "dependencyConditions": [
+                  "Succeeded"
+                ]
+              }
+            ],
+            "inputs": [
+              {
+                "referenceName": "SalesParquetExport",
+                "type": "DatasetReference",
+                "parameters": {
+                  "folderPath": {
+                    "value": "@concat('pipeline/exports/', pipeline().RunId, '/daily_channel_sales')",
+                    "type": "Expression"
+                  }
+                }
+              }
+            ],
+            "outputs": [
+              {
+                "referenceName": "SalesPostgresTable",
+                "type": "DatasetReference",
+                "parameters": {
+                  "tableName": "daily_channel_sales"
+                }
+              }
+            ],
+            "typeProperties": {
+              "source": {
+                "type": "ParquetSource",
+                "storeSettings": {
+                  "type": "AzureBlobFSReadSettings",
+                  "recursive": false,
+                  "wildcardFileName": "*.parquet"
+                }
+              },
+              "sink": {
+                "type": "AzurePostgreSqlSink",
+                "writeMethod": "Upsert",
+                "upsertSettings": {
+                  "keys": [
+                    "sales_date",
+                    "channel"
+                  ]
+                }
+              },
+              "enableStaging": false,
+              "translator": {
+                "type": "TabularTranslator",
+                "mappings": [
+                  {
+                    "source": {
+                      "name": "sales_date"
+                    },
+                    "sink": {
+                      "name": "sales_date"
+                    }
+                  },
+                  {
+                    "source": {
+                      "name": "channel"
+                    },
+                    "sink": {
+                      "name": "channel"
+                    }
+                  },
+                  {
+                    "source": {
+                      "name": "order_count"
+                    },
+                    "sink": {
+                      "name": "order_count"
+                    }
+                  },
+                  {
+                    "source": {
+                      "name": "units_sold"
+                    },
+                    "sink": {
+                      "name": "units_sold"
+                    }
+                  },
+                  {
+                    "source": {
+                      "name": "gross_cents"
+                    },
+                    "sink": {
+                      "name": "gross_cents"
+                    }
+                  },
+                  {
+                    "source": {
+                      "name": "refund_cents"
+                    },
+                    "sink": {
+                      "name": "refund_cents"
+                    }
+                  },
+                  {
+                    "source": {
+                      "name": "net_cents"
+                    },
+                    "sink": {
+                      "name": "net_cents"
+                    }
+                  }
+                ],
+                "typeConversion": true
+              }
+            }
+          },
+          {
+            "name": "UpsertDailySales",
+            "type": "Copy",
+            "policy": {
+              "timeout": "0.00:30:00",
+              "retry": 1,
+              "retryIntervalInSeconds": 30
+            },
+            "dependsOn": [
+              {
+                "activity": "UpsertChannelSales",
+                "dependencyConditions": [
+                  "Succeeded"
+                ]
+              }
+            ],
+            "inputs": [
+              {
+                "referenceName": "SalesParquetExport",
+                "type": "DatasetReference",
+                "parameters": {
+                  "folderPath": {
+                    "value": "@concat('pipeline/exports/', pipeline().RunId, '/daily_sales')",
+                    "type": "Expression"
+                  }
+                }
+              }
+            ],
+            "outputs": [
+              {
+                "referenceName": "SalesPostgresTable",
+                "type": "DatasetReference",
+                "parameters": {
+                  "tableName": "daily_sales"
+                }
+              }
+            ],
+            "typeProperties": {
+              "source": {
+                "type": "ParquetSource",
+                "storeSettings": {
+                  "type": "AzureBlobFSReadSettings",
+                  "recursive": false,
+                  "wildcardFileName": "*.parquet"
+                }
+              },
+              "sink": {
+                "type": "AzurePostgreSqlSink",
+                "writeMethod": "Upsert",
+                "upsertSettings": {
+                  "keys": [
+                    "sales_date"
+                  ]
+                }
+              },
+              "enableStaging": false,
+              "translator": {
+                "type": "TabularTranslator",
+                "mappings": [
+                  {
+                    "source": {
+                      "name": "sales_date"
+                    },
+                    "sink": {
+                      "name": "sales_date"
+                    }
+                  },
+                  {
+                    "source": {
+                      "name": "order_count"
+                    },
+                    "sink": {
+                      "name": "order_count"
+                    }
+                  },
+                  {
+                    "source": {
+                      "name": "units_sold"
+                    },
+                    "sink": {
+                      "name": "units_sold"
+                    }
+                  },
+                  {
+                    "source": {
+                      "name": "gross_cents"
+                    },
+                    "sink": {
+                      "name": "gross_cents"
+                    }
+                  },
+                  {
+                    "source": {
+                      "name": "refund_cents"
+                    },
+                    "sink": {
+                      "name": "refund_cents"
+                    }
+                  },
+                  {
+                    "source": {
+                      "name": "net_cents"
+                    },
+                    "sink": {
+                      "name": "net_cents"
+                    }
+                  }
+                ],
+                "typeConversion": true
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

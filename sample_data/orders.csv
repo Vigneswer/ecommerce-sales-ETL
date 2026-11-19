@@ -1,0 +1,11 @@
+order_id,order_date,channel,status
+O1001,2025-01-15,web,paid
+O1002,2025-01-15,marketplace,completed
+O1003,2025-01-15,web,cancelled
+O1004,2025-01-16,web,paid
+O1005,2025-01-15,web,paid
+O1006,2025-01-15,web,pending
+O1007,2025-01-15,marketplace,paid
+O1008,2025-02-30,web,paid
+O1009,2025-01-15,web,paid
+O1009,2025-01-15,marketplace,paid
